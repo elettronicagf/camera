@@ -55,8 +55,10 @@
 #include <linux/v4l2-subdev.h>
 #include <linux/videodev.h>
 #include <linux/videodev2.h>
+#define CAMERA_VERSION "1.0"
+#define TVP5151_SUBDEV "/dev/v4l-subdev2"
 
-
+#define CONFIG_OMAP3530
 /* structure used to store information of the buffers */
 struct buf_info {
 	int index;
@@ -74,8 +76,7 @@ struct media_dev {
 	/* Entities we do care about */
 	int video;	/* Streaming entity */
 	int ccdc;
-	int tvp5146;
-	int mt9t111;
+	int tvp515x;
 
 	/* Total number of entities */
 	unsigned int num_entities;
@@ -119,8 +120,7 @@ struct display_dev {
 /* Media entity names */
 #define ENTITY_VIDEO_CCDC_OUT_NAME	"OMAP3 ISP CCDC output"
 #define ENTITY_CCDC_NAME		"OMAP3 ISP CCDC"
-#define ENTITY_TVP514X_NAME		"tvp514x 3-005c"
-#define ENTITY_MT9T111_NAME		"mt9t111 2-003c"
+#define ENTITY_TVP515X_NAME		"tvp515x 2-005c"
 #endif
 
 #define NUM_BUFFERS     	3
@@ -136,7 +136,7 @@ struct display_dev {
 #define DEF_PIX_FMT		V4L2_PIX_FMT_UYVY
 #define IMG_WIDTH_PAL_NTSC	720
 #define IMG_HEIGHT_NTSC		480
-#define IMG_HEIGHT_PAL		574
+#define IMG_HEIGHT_PAL		576
 
 #define IMG_WIDTH_VGA		640
 #define IMG_HEIGHT_VGA		480
@@ -180,17 +180,15 @@ static int enumerate_all_entities(struct media_dev *media)
 	index = 0;
 	do {
 		memset(&media->entity[index], 0, sizeof(struct media_entity_desc));
-		media->entity[index].id = index | MEDIA_ENTITY_ID_FLAG_NEXT;
+		media->entity[index].id = index | MEDIA_ENT_ID_FLAG_NEXT;
 		ret = ioctl(media->media_fd, MEDIA_IOC_ENUM_ENTITIES, &media->entity[index]);
 		if (ret < 0) {
 			break;
 		} else {
 			if (!strcmp(media->entity[index].name, ENTITY_VIDEO_CCDC_OUT_NAME))
 				media->video =  media->entity[index].id;
-			else if (!strcmp(media->entity[index].name, ENTITY_TVP514X_NAME))
-				media->tvp5146 =  media->entity[index].id;
-			else if (!strcmp(media->entity[index].name, ENTITY_MT9T111_NAME))
-				media->mt9t111 =  media->entity[index].id;
+			else if (!strcmp(media->entity[index].name, ENTITY_TVP515X_NAME))
+				media->tvp515x =  media->entity[index].id;
 			else if (!strcmp(media->entity[index].name, ENTITY_CCDC_NAME))
 				media->ccdc =  media->entity[index].id;
 			printf("[%d]:%s\n", media->entity[index].id, media->entity[index].name);
@@ -234,12 +232,12 @@ static int reset_media_links(struct media_dev *media)
 			for(i = 0; i < media->entity[index].links; i++) {
 				link.source.entity = links.links->source.entity;
 				link.source.index = links.links->source.index;
-				link.source.flags = MEDIA_PAD_FLAG_OUTPUT;
+				link.source.flags = MEDIA_PAD_FL_SOURCE;
 				link.sink.entity = links.links->sink.entity;
 				link.sink.index = links.links->sink.index;
-				link.sink.flags = MEDIA_PAD_FLAG_INPUT;
-				link.flags = (link.flags & ~MEDIA_LINK_FLAG_ENABLED) |
-					(link.flags & MEDIA_LINK_FLAG_IMMUTABLE);
+				link.sink.flags = MEDIA_PAD_FL_SINK;
+				link.flags = (link.flags & ~MEDIA_LNK_FL_ENABLED) |
+					(link.flags & MEDIA_LNK_FL_IMMUTABLE);
 				ret = ioctl(media->media_fd, MEDIA_IOC_SETUP_LINK, &link);
 				if(ret)
 					break;
@@ -271,7 +269,7 @@ static int setup_media_links(struct media_dev *media)
 				printf("pads for entity %d=", media->entity[index].id);
 			for(i = 0 ; i < media->entity[index].pads; i++) {
 				printf("(%d %s) ", links.pads->index,
-						(links.pads->flags & MEDIA_PAD_FLAG_INPUT) ?
+						(links.pads->flags & MEDIA_PAD_FL_SINK) ?
 						"INPUT" : "OUTPUT");
 				links.pads++;
 			}
@@ -282,7 +280,7 @@ static int setup_media_links(struct media_dev *media)
 						links.links->source.index,
 						links.links->sink.entity,
 						links.links->sink.index);
-				if(links.links->flags & MEDIA_LINK_FLAG_ENABLED)
+				if(links.links->flags & MEDIA_LNK_FL_ENABLED)
 					printf("\tACTIVE\n");
 				else
 					printf("\tINACTIVE \n");
@@ -292,42 +290,39 @@ static int setup_media_links(struct media_dev *media)
 		}
 	}
 
-	if (media->input_source != 0)
-		input = media->mt9t111;
-	else
-		input = media->tvp5146;
+	input = media->tvp515x;
 
-	printf("Enabling link [tvp5146]===>[ccdc]\n");
+	printf("Enabling link [tvp515x]===>[ccdc]\n");
 	memset(&link, 0, sizeof(link));
 
-	link.flags |=  MEDIA_LINK_FLAG_ENABLED;
+	link.flags |=  MEDIA_LNK_FL_ENABLED;
 	link.source.entity = input;
 	link.source.index = 0;	/* Only 1 pad */
-	link.source.flags = MEDIA_PAD_FLAG_OUTPUT;
+	link.source.flags = MEDIA_PAD_FL_SOURCE;
 
 	link.sink.entity = media->ccdc;
 	link.sink.index = 0; /* Sink pad of CCDC, 0 */
-	link.sink.flags = MEDIA_PAD_FLAG_INPUT;
+	link.sink.flags = MEDIA_PAD_FL_SINK;
 
 	ret = ioctl(media->media_fd, MEDIA_IOC_SETUP_LINK, &link);
 	if(ret) {
-		printf("failed to enable link between tvp514x and ccdc\n");
+		printf("failed to enable link between tvp515x and ccdc\n");
 		return ret;
 	} else {
-		printf("[tvp514x]===>[ccdc]\tenabled\n");
+		printf("[tvp515x]===>[ccdc]\tenabled\n");
 	}
 	/* Enable 'ccdc===>memory' link */
 	printf("Enabling link [ccdc]===>[video_node]\n");
 	memset(&link, 0, sizeof(link));
 
-	link.flags |=  MEDIA_LINK_FLAG_ENABLED;
+	link.flags |=  MEDIA_LNK_FL_ENABLED;
 	link.source.entity = media->ccdc;
 	link.source.index = 1; /* Source pad of CCDC: 1 */
-	link.source.flags = MEDIA_PAD_FLAG_OUTPUT;
+	link.source.flags = MEDIA_PAD_FL_SOURCE;
 
 	link.sink.entity = media->video;
 	link.sink.index = 0;
-	link.sink.flags = MEDIA_PAD_FLAG_INPUT;
+	link.sink.flags = MEDIA_PAD_FL_SINK;
 
 	ret = ioctl(media->media_fd, MEDIA_IOC_SETUP_LINK, &link);
 	if(ret)
@@ -346,9 +341,9 @@ static int set_subdev_format(struct media_dev *media,
 	char subdev[20];
 
 	/* TODO: Should be having some mechanism to select subdev */
-	ccdc_fd = open("/dev/v4l-subdev2", O_RDWR);
+	ccdc_fd = open(TVP5151_SUBDEV, O_RDWR);
 	if(ccdc_fd == -1) {
-		printf("failed to open %s\n", "/dev/v4l-subdev2");
+		printf("failed to open %s\n", TVP5151_SUBDEV);
 		return -1;
 	}
 	memset(&fmt, 0, sizeof(fmt));
@@ -378,11 +373,8 @@ static int set_subdev_format(struct media_dev *media,
 		return ret;
 	}
 
-	/* Default to tvp5146 */
-	if (media->input_source != 0)
-		strcpy(subdev, "/dev/v4l-subdev8");
-	else
-		strcpy(subdev, "/dev/v4l-subdev9");
+	/* Default to tvp5151 */
+	strcpy(subdev, "/dev/v4l-subdev8");
 
 	tvp_fd = open(subdev, O_RDWR);
 	if(tvp_fd == -1) {
@@ -462,7 +454,8 @@ static int get_current_capture_format(int input_src, struct capture_dev *capture
 	index = capture->tvp_input;
 
 	if (ioctl(capture->capture_fd, VIDIOC_S_INPUT, &index) < 0) {
-		perror("VIDIOC_S_INPUT");
+		perror("VIDIOC_S_INPUT. Input not detected!");
+		return -1;
 	}
 	memset(&input, 0, sizeof(struct v4l2_input));
 	input.index = index;
@@ -800,8 +793,10 @@ ERROR:
 
 static void usage(void)
 {
-	printf("Usage: saMmapLoopback [-i <tvp input>] [-h help]");
-	printf("\t[-i <S-Vid/CVBS>]	: 0: CVBS 1 - S-Video\n");
+	printf("Elettronica GF s.r.l\n");
+	printf("camera v%s.\nUsed code of saMmapLoopback.c \nfrom Texas Instruments AM35x-OMAP35x-LINUX-PSP-04.02.00.07\n",CAMERA_VERSION);
+	printf("Usage: camera [-i <tvp input>] [-h help]");
+	printf("\nInputs: 0->CN39 1->CN36 2->CN38 3->CN37\n");
 }
 static int timeval_subtract(struct timeval *result, struct timeval *x,
 		                     struct timeval *y)
@@ -840,6 +835,7 @@ int main(int argc, char *argv[])
 	struct capture_dev capture;
 	struct display_dev display;
 	struct timeval before, after, result;
+	int fdCard;
 
 	memset(&media, 0, sizeof(struct media_dev));
 	memset(&capture, 0, sizeof(struct capture_dev));
@@ -984,6 +980,9 @@ int main(int argc, char *argv[])
 	capture.capture_buf.index = 0;
 	capture.capture_buf.memory = V4L2_MEMORY_MMAP;
 
+	fdCard = open("a.yuv",O_RDWR|O_CREAT);
+
+
 	/* One buffer is dequeued from display and capture channels.
 	 * Capture buffer will be copied to display buffer.
 	 * All two buffers are put back to respective channels.
@@ -1015,6 +1014,7 @@ int main(int argc, char *argv[])
 			cap_ptr += capture.width * 2;
 			dis_ptr += display.width * 2;
 		}
+		//write(fdCard,cap_ptr,720*576*2);
 
 		ret = ioctl(capture.capture_fd, VIDIOC_QBUF, &capture.capture_buf);
 		if (ret < 0) {
@@ -1028,6 +1028,7 @@ int main(int argc, char *argv[])
 			goto err_4;
 		}
 	}
+	close(fdCard);
 	gettimeofday(&after, NULL);
 
 	a = V4L2_BUF_TYPE_VIDEO_OUTPUT;
