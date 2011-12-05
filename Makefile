@@ -1,12 +1,13 @@
 include ../makefile_conf/Makefile.rules
 CPPFLAGS += $(DEFINES) $(OPTIMIZE)  -Wall 
 CFLAGS  = -I$(KERNEL_DIR)   -march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp -mthumb-interwork -mno-thumb -fomit-frame-pointer -frename-registers -ggdb2 -Wall -Winline -fno-strength-reduce
-PROGS_O  = camera.o
+PROGS_O  = camera.o camera_2.6.37.o
 PROG    = camera
 all: $(PROG)
 
 $(PROG): objs
-	$(CPP) $(CFLAGS) $(LFLAGS) -o $(PROG) $(PROGS_O) $(LIBS)
+	$(CPP) $(CFLAGS) $(LFLAGS) -o camera_2.6.37 camera_2.6.37.o $(LIBS)
+	$(CPP) $(CFLAGS) $(LFLAGS) -o camera camera.o $(LIBS)
 #	$(STRIP) $(PROG)
 xd:  xd.o
 	gcc  -o xd xd.o 

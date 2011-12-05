@@ -1073,7 +1073,7 @@ err_3:
 		       capture_buff_info[i].length);
 		capture_buff_info[i].start = NULL;
 	}
-err_2:
+//err_2:
 	/* Close the file handle */
 	close_video_dev(capture.capture_fd);
 err_1:
