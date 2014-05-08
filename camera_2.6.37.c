@@ -728,10 +728,10 @@ static int display_prepare_streaming(struct display_dev *display)
 		goto ERROR;
 	}
 	/* Set the image size to VGA and pixel format to RGB565 */
-	fmt->fmt.win.w.left = (800 -360)/2;
-	fmt->fmt.win.w.top = (480 - 240)/2;
-	fmt->fmt.win.w.width = 360;
-	fmt->fmt.win.w.height = 240;
+	fmt->fmt.win.w.left = 0;
+	fmt->fmt.win.w.top = 0;
+	fmt->fmt.win.w.width = 720;
+	fmt->fmt.win.w.height = 576;
 
 	ret = ioctl(display->display_fd, VIDIOC_S_FMT, fmt);
 	if(ret<0) {
