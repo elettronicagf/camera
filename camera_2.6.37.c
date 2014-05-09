@@ -63,7 +63,7 @@
 #include <linux/v4l2-subdev.h>
 #include <linux/videodev.h>
 #include <linux/videodev2.h>
-#define CAMERA_VERSION "1.1"
+#define CAMERA_VERSION "1.2"
 #define TVP5151_SUBDEV "/dev/v4l-subdev2"
 #define FB_DEV "/dev/fb1"
 
