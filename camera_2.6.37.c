@@ -57,6 +57,7 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 
+#include <linux/omapfb.h>
 #include <linux/media.h>
 #include <linux/v4l2-mediabus.h>
 #include <linux/v4l2-subdev.h>
@@ -64,6 +65,8 @@
 #include <linux/videodev2.h>
 #define CAMERA_VERSION "1.1"
 #define TVP5151_SUBDEV "/dev/v4l-subdev2"
+#define FB_DEV "/dev/fb1"
+
 
 #define CONFIG_OMAP3530
 /* structure used to store information of the buffers */
@@ -148,10 +151,8 @@ struct display_dev {
 #define IMG_WIDTH_VGA		640
 #define IMG_HEIGHT_VGA		480
 
-/* capture_buff_info and display_buff_info stores buffer information of capture
-   and display respectively. */
+/* capture_buff_info o stores buffer information of capture */
 static struct buf_info capture_buff_info[CAPTURE_MAX_BUFFER];
-static struct buf_info display_buff_info[DISPLAY_MAX_BUFFER];
 
 /* Function declaration */
 static int  open_video_dev(const char *dev, int *capture_fd);
@@ -642,182 +643,6 @@ ERROR:
 	return -1;
 }
 
-/*
- * This function initializes display device. It sets output and standard for
- * LCD. These output and standard are same as those detected in capture device.
- * It, then, allocates buffers in the driver's memory space and mmaps them in
- * the application space
- */
-static int display_prepare_streaming(struct display_dev *display)
-{
-	int ret, i, j;
-	struct v4l2_requestbuffers reqbuf;
-	struct v4l2_buffer buf;
-	struct v4l2_capability capability;
-	struct v4l2_control control;
-	struct v4l2_format *fmt = &display->display_fmt;
-
-	/* Open the video display device */
-	display->display_fd = open((const char *) DISPLAY_DEVICE, O_RDWR);
-	if (display->display_fd <= 0) {
-		printf("Cannot open = %s device\n", DISPLAY_DEVICE);
-		return -1;
-	}
-	printf("\n%s: Opened Channel\n", DISPLAY_NAME);
-
-	/* Check if the device is capable of streaming */
-	if (ioctl(display->display_fd, VIDIOC_QUERYCAP, &capability) < 0) {
-		perror("VIDIOC_QUERYCAP");
-		goto ERROR;
-	}
-
-	if (capability.capabilities & V4L2_CAP_STREAMING)
-		printf("%s: Capable of streaming\n", DISPLAY_NAME);
-	else {
-		printf("%s: Not capable of streaming\n", DISPLAY_NAME);
-		goto ERROR;
-	}
-
-	/* Rotate by 90 degree so that 480x640 resolution will become 640x480 */
-
-        control.id = V4L2_CID_ROTATE;
-        control.value = 0;
-	ret = ioctl(display->display_fd, VIDIOC_S_CTRL, &control);
-	if (ret < 0) {
-		perror("VIDIOC_S_CTRL");
-		goto ERROR;
-	}
-
-	/* Get the format */
-	fmt->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-	ret = ioctl(display->display_fd, VIDIOC_G_FMT, fmt);
-	if (ret < 0) {
-		perror("VIDIOC_G_FMT");
-		goto ERROR;
-	}
-
-	fmt->fmt.pix.width = display->width;
-	fmt->fmt.pix.height = display->height;
-	fmt->fmt.pix.pixelformat = DEF_PIX_FMT;
-	fmt->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-	ret = ioctl(display->display_fd, VIDIOC_S_FMT, fmt);
-	if (ret < 0) {
-		perror("VIDIOC_S_FMT");
-		goto ERROR;
-	}
-
-	ret = ioctl(display->display_fd, VIDIOC_G_FMT, fmt);
-	if (ret < 0) {
-		perror("VIDIOC_G_FMT");
-		goto ERROR;
-	}
-
-		if (fmt->fmt.pix.pixelformat != DEF_PIX_FMT) {
-			printf("%s: Requested pixel format not supported\n",
-					CAPTURE_NAME);
-			goto ERROR;
-		}
-
-
-	/* Get the parameters before setting and
-	 * set only required parameters */
-	fmt->type = V4L2_BUF_TYPE_VIDEO_OVERLAY;
-	ret = ioctl(display->display_fd, VIDIOC_G_FMT, fmt);
-	if(ret<0) {
-		perror("Set Format failed\n");
-		goto ERROR;
-	}
-	/* Set the image size to VGA and pixel format to RGB565 */
-	fmt->fmt.win.w.left = 0;
-	fmt->fmt.win.w.top = 0;
-	fmt->fmt.win.w.width = 720;
-	fmt->fmt.win.w.height = 576;
-
-	ret = ioctl(display->display_fd, VIDIOC_S_FMT, fmt);
-	if(ret<0) {
-		perror("Set Format failed\n");
-		goto ERROR;
-	}
-
-	/* Buffer allocation
-	 * Buffer can be allocated either from capture driver or
-	 * user pointer can be used
-	 */
-	/* Request for MAX_BUFFER input buffers. As far as Physically contiguous
-	 * memory is available, driver can allocate as many buffers as
-	 * possible. If memory is not available, it returns number of
-	 * buffers it has allocated in count member of reqbuf.
-	 * HERE count = number of buffer to be allocated.
-	 * type = type of device for which buffers are to be allocated.
-	 * memory = type of the buffers requested i.e. driver allocated or
-	 * user pointer */
-	reqbuf.count = display->num_bufs;
-	reqbuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-	reqbuf.memory = V4L2_MEMORY_MMAP;
-	ret = ioctl(display->display_fd, VIDIOC_REQBUFS, &reqbuf);
-	if (ret < 0) {
-		perror("Cannot allocate memory");
-		goto ERROR;
-	}
-	/* Store the numbfer of buffers allocated */
-	display->num_bufs = reqbuf.count;
-	printf("%s: Number of requested buffers = %d\n", DISPLAY_NAME,
-	       display->num_bufs);
-
-	memset(&buf, 0, sizeof(buf));
-
-	/* Mmap the buffers
-	 * To access driver allocated buffer in application space, they have
-	 * to be mmapped in the application space using mmap system call */
-	for (i = 0; i < display->num_bufs; i++) {
-		/* Query physical address of the buffers */
-		buf.type = reqbuf.type;
-		buf.index = i;
-		buf.memory = reqbuf.memory;
-		ret = ioctl(display->display_fd, VIDIOC_QUERYBUF, &buf);
-		if (ret < 0) {
-			perror("VIDIOC_QUERYCAP");
-			display->num_bufs = i;
-			goto ERROR1;
-		}
-
-		/* Mmap the buffers in application space */
-		display_buff_info[i].length = buf.length;
-		display_buff_info[i].index =  i;
-		display_buff_info[i].start = mmap(NULL, buf.length,
-				PROT_READ | PROT_WRITE, MAP_SHARED, display->display_fd,
-				buf.m.offset);
-
-		if (display_buff_info[i].start == MAP_FAILED) {
-			printf("Cannot mmap = %d buffer\n", i);
-			display->num_bufs = i;
-			goto ERROR1;
-		}
-		memset((void *) display_buff_info[i].start, 0x80,
-		       display_buff_info[i].length);
-
-		/* Enqueue buffers
-		 * Before starting streaming, all the buffers needs to be
-		 * en-queued in the driver incoming queue. These buffers will
-		 * be used by thedrive for storing captured frames. */
-		ret = ioctl(display->display_fd, VIDIOC_QBUF, &buf);
-		if (ret < 0) {
-			perror("VIDIOC_QBUF");
-			display->num_bufs = i + 1;
-			goto ERROR1;
-		}
-	}
-	printf("%s: Init done successfully\n\n", DISPLAY_NAME);
-	return 0;
-
-ERROR1:
-	for (j = 0; j < display->num_bufs; j++)
-		munmap(display_buff_info[j].start,
-			display_buff_info[j].length);
-ERROR:
-	close(display->display_fd);
-	return -1;
-}
 
 static void usage(void)
 {
@@ -856,26 +681,41 @@ static int timeval_subtract(struct timeval *result, struct timeval *x,
 
 int main(int argc, char *argv[])
 {
-	char shortoptions[] = "s:l:n:i:h:";
+	char shortoptions[] = "s:l:i:h:";
 	int i = 0, ret = 0, a, c, index;
 	unsigned int loop_cnt = MAXLOOPCOUNT;
 	struct media_dev media;
 	struct capture_dev capture;
-	struct display_dev display;
 	struct timeval before, after, result;
 	int fdCard;
+	static int fd_overlay;
+	static unsigned char* overlay_start;
+	unsigned char *temp_fb;
 
 	memset(&media, 0, sizeof(struct media_dev));
 	memset(&capture, 0, sizeof(struct capture_dev));
-	memset(&display, 0, sizeof(struct display_dev));
+
+
+	fd_overlay = open(FB_DEV, O_RDWR);
+	if (fd_overlay < 0) {
+		printf("Cannot open /dev/fb1");
+		exit(1);
+		return -1;
+	}
+	overlay_start = mmap(NULL, 720 * 574 * 2, PROT_READ
+			| PROT_WRITE, MAP_SHARED, fd_overlay, 0);
+	if (overlay_start < 0) {
+		printf("Cannot mmap /dev/fb1");
+		exit(1);
+		return -1;
+	}
+
 
 	/* Setup default init for all devices */
 	/* Media */
 	media.input_source = 0;	/* default to tvp5146 */
 	/* Capture */
 	capture.num_bufs = CAPTURE_MAX_BUFFER;
-	/* Display */
-	display.num_bufs = DISPLAY_MAX_BUFFER;
 
 	for (;;) {
 		c = getopt_long(argc, argv, shortoptions, (void *) NULL,
@@ -893,10 +733,6 @@ int main(int argc, char *argv[])
 			case 'L':
 				loop_cnt = atoi(optarg);
 				break;
-			case 'n':
-			case 'N':
-				capture.num_bufs = display.num_bufs = atoi(optarg);
-				break;
 			case 'i':
 			case 'I':
 				capture.tvp_input = atoi(optarg);
@@ -912,9 +748,7 @@ int main(int argc, char *argv[])
 	for(i = 0; i < capture.num_bufs; i++) {
 		capture_buff_info[i].start = NULL;
 	}
-	for(i = 0; i < display.num_bufs; i++) {
-		display_buff_info[i].start = NULL;
-	}
+
 	/*
 	 * Initialization section
 	 * In case of Media-Controller compliant device: Setup Links
@@ -950,10 +784,6 @@ int main(int argc, char *argv[])
 	if (ret < 0)
 		goto err_1;
 
-	/* Make width/height capture = display*/
-	display.width = capture.width;
-	display.height = capture.height;
-
 #if defined (CONFIG_OMAP3530)
 	/*
 	 * Now set the detected format at each pad
@@ -966,29 +796,6 @@ int main(int argc, char *argv[])
 	if(ret < 0)
 		goto err_3;
 
-	/* open display channel */
-	ret = display_prepare_streaming(&display);
-	if(ret < 0) {
-		printf("Error in opening display device\n");
-		goto err_4;
-	}
-
-	/* run section
-	 * STEP2:
-	 * Here display and capture channels are started for streaming. After
-	 * this capture device will start capture frames into enqueued
-	 * buffers and display device will start displaying buffers from
-	 * the qneueued buffers */
-
-	/* Start Streaming. on display device */
-	a = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-	ret = ioctl(display.display_fd, VIDIOC_STREAMON, &a);
-	if (ret < 0) {
-		perror("VIDIOC_STREAMON");
-		goto err_4;
-	}
-	printf("%s: Stream on...\n", DISPLAY_NAME);
-
 	/* Start Streaming. on capture device */
 	a = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	ret = ioctl(capture.capture_fd, VIDIOC_STREAMON, &a);
@@ -998,16 +805,10 @@ int main(int argc, char *argv[])
 	}
 	printf("%s: Stream on...\n", CAPTURE_NAME);
 
-	/* Set the display buffers for queuing and dqueueing operation */
-	display.display_buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-	display.display_buf.index = 0;
-	display.display_buf.memory = V4L2_MEMORY_MMAP;
-
 	/* Set the capture buffers for queuing and dqueueing operation */
 	capture.capture_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	capture.capture_buf.index = 0;
 	capture.capture_buf.memory = V4L2_MEMORY_MMAP;
-
 	fdCard = open("a.yuv",O_RDWR|O_CREAT);
 
 
@@ -1019,14 +820,8 @@ int main(int argc, char *argv[])
 	 */
 	gettimeofday(&before, NULL);
 	for (i = 0; i < loop_cnt; i++) {
-		int h;
-		unsigned char *cap_ptr, *dis_ptr;
-		/* Dequeue display buffer */
-		ret = ioctl(display.display_fd, VIDIOC_DQBUF, &display.display_buf);
-		if (ret < 0) {
-			perror("VIDIOC_DQBUF");
-			goto err_4;
-		}
+		unsigned char *cap_ptr;
+
 
 		/* Dequeue capture buffer */
 		ret = ioctl(capture.capture_fd, VIDIOC_DQBUF, &capture.capture_buf);
@@ -1036,13 +831,10 @@ int main(int argc, char *argv[])
 		}
 
 		cap_ptr = (unsigned char*)capture_buff_info[capture.capture_buf.index].start;
-		dis_ptr = (unsigned char*)display_buff_info[display.display_buf.index].start;
-		for (h = 0; h < display.height; h++) {
-			memcpy(dis_ptr, cap_ptr, display.width * 2);
-			cap_ptr += capture.width * 2;
-			dis_ptr += display.width * 2;
-		}
-		//write(fdCard,cap_ptr,720*576*2);
+
+		ioctl(fd_overlay, OMAPFB_WAITFORVSYNC, 0);
+		temp_fb = overlay_start;
+		memcpy(temp_fb, cap_ptr, 720*2 * 574);
 
 		ret = ioctl(capture.capture_fd, VIDIOC_QBUF, &capture.capture_buf);
 		if (ret < 0) {
@@ -1050,22 +842,10 @@ int main(int argc, char *argv[])
 			goto err_4;
 		}
 
-		ret = ioctl(display.display_fd, VIDIOC_QBUF, &display.display_buf);
-		if (ret < 0) {
-			perror("VIDIOC_QBUF");
-			goto err_4;
-		}
+
 	}
 	close(fdCard);
 	gettimeofday(&after, NULL);
-
-	a = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-	ret = ioctl(display.display_fd, VIDIOC_STREAMOFF, &a);
-	if (ret < 0) {
-		perror("VIDIOC_STREAMOFF");
-		goto err_4;
-	}
-	printf("\n%s: Stream off!!\n", DISPLAY_NAME);
 
 	a = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	ret = ioctl(capture.capture_fd, VIDIOC_STREAMOFF, &a);
@@ -1085,15 +865,6 @@ int main(int argc, char *argv[])
 	printf("Calculated Frame Rate:\t%ld Fps\n\n", loop_cnt/result.tv_sec);
 
 err_4:
-	/* Un-map the buffers */
-	for (i = 0; i < display.num_bufs; i++) {
-		munmap(display_buff_info[i].start,
-		       display_buff_info[i].length);
-		display_buff_info[i].start = NULL;
-	}
-
-	/* Close the file handle */
-	close(display.display_fd);
 err_3:
 	/* Un-map the buffers */
 	for (i = 0; i < capture.num_bufs; i++) {
